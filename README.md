@@ -60,9 +60,12 @@ Current state of the data sources:
 - **Bus EMT**: needs `EMT_CLIENT_ID` and `EMT_PASS_KEY`
   (free at https://openapi.emtmadrid.es) in `.env`; untested without them.
 
-Note for node >= 25: the MCP pins `better-sqlite3@13` (patched in
-`mcp-madrid-public-transport/package.json`, upstream `12.4.1` doesn't
-compile on this node).
+> ⚠️ **Warning for node >= 25**: `better-sqlite3@12.4.1` (shipped by the
+> upstream submodule) doesn't compile on this node. The working fix is
+> bumping it to `^13.0.3` in `mcp-madrid-public-transport/package.json`,
+> but since the submodule points at upstream, **this patch is not in a
+> fresh clone** — `npm install` will fail. Re-apply it by hand after
+> cloning before building the server.
 
 # Running the tests
 
