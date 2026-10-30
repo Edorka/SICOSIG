@@ -17,12 +17,15 @@ Same agent, two backends (configurable in `.env`, see `.env.example`):
 
 # Setup
 
-Clone and build the MCP server (only once, downloads ~200MB of GTFS data):
+Clone this repo with submodules and build the MCP server (only once,
+downloads ~200MB of GTFS data):
 
 ```
-git clone https://github.com/dieguezz/mcp-madrid-public-transport.git
-cd mcp-madrid-public-transport && npm install && npm run build && cd ..
+git clone --recurse-submodules https://github.com/Edorka/SICOSIG.git
+cd SICOSIG/mcp-madrid-public-transport && npm install && npm run build && cd ..
 ```
+
+(For an existing clone: `git submodule update --init`.)
 
 Then the python side:
 
