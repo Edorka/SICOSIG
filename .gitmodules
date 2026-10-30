@@ -1,0 +1,3 @@
+[submodule "mcp-madrid-public-transport"]
+	path = mcp-madrid-public-transport
+	url = https://github.com/dieguezz/mcp-madrid-public-transport.git
