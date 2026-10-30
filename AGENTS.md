@@ -41,4 +41,6 @@ Model note: the agent requires tool calling, and `gemma-3-4b` can't do it
 reports "does not support tools" — empty replies either way). The deployed
 `.env` overrides with `SICOSIG_MODEL=google/gemma-4-31B-it` (DeepInfra tool
 calling verified). For fully local serving use a tool-capable ollama model
-(e.g. `qwen3:4b`) via `SICOSIG_BASE_URL`/`SICOSIG_MODEL`, never gemma3.
+via `SICOSIG_BASE_URL`/`SICOSIG_MODEL`, never gemma3; `qwen3.5:4b` is
+verified working (real MCP tool calls with correct args through the
+OpenAI-compatible endpoint).

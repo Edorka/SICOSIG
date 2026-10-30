@@ -12,8 +12,10 @@ Same agent, two backends (configurable in `.env`, see `.env.example`):
 
 - **DeepInfra** (default): `google/gemma-3-4b-it`, no install, needs
   `DEEPINFRA_API_KEY`.
-- **Local via ollama**: `ollama pull gemma3:4b`, then set
-  `SICOSIG_BASE_URL=http://localhost:11434/v1` and `SICOSIG_MODEL=gemma3:4b`.
+- **Local via ollama** (tool calling verified): `ollama pull qwen3.5:4b`,
+  then set `SICOSIG_BASE_URL=http://localhost:11434/v1` and
+  `SICOSIG_MODEL=qwen3.5:4b`. Do not use gemma models: they can't call
+  tools, and the agent needs them to check real-time arrivals.
 
 # Setup
 
