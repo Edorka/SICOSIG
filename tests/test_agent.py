@@ -1,9 +1,14 @@
+import json
 import os
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
-from agent import (DEFAULT_MODEL, MCP_DIR, SYSTEM_PROMPT, unindent,
-                   build_mcp_client, build_model)
+from langchain_core.messages import AIMessage, ToolMessage
+
+from agent import (DEFAULT_MODEL, MAX_VERIFICATION_ROUNDS, MCP_DIR,
+                   SYSTEM_PROMPT, SicosigAgent, unindent, build_mcp_client,
+                   build_model, itinerary_of)
 
 
 class AgentConfigTestCase(unittest.TestCase):
@@ -63,6 +68,98 @@ class AgentConfigTestCase(unittest.TestCase):
         with patch('agent.load_dotenv'):
             target = build_mcp_client().connections['madrid-transport']
         self.assertEqual(target['transport'], 'stdio')
+
+    def test_itinerary_of_picks_last_valid_route(self):
+        error = ToolMessage(content=json.dumps({'error': 'sin ruta'}),
+                            tool_call_id='1', name='plan_route')
+        valid = ToolMessage(content=json.dumps({'legs': [{'line': '1'}]}),
+                            tool_call_id='2', name='plan_route')
+        self.assertEqual(itinerary_of([error, valid]),
+                         {'legs': [{'line': '1'}]})
+        self.assertIsNone(itinerary_of([error]))
+        self.assertIsNone(itinerary_of([]))
+
+
+ROUTE = {'legs': [{'mode': 'cercanias', 'line': 'C-1', 'route_id': '10R1',
+                   'frm': 'A', 'to': 'B'}]}
+ACTIVE = [{'route_ids': {'10R1'}, 'stop_ids': set(), 'active_period': [],
+           'text': 'obras en via'}]
+
+
+class FakeGraph:
+
+    def __init__(self, probe, itinerary):
+        self.probe = probe
+        self.itinerary = itinerary
+        self.runs = 0
+
+    async def astream(self, state, stream_mode=None):
+        self.probe.append('run')
+        self.runs += 1
+        messages = list(state['messages'])
+        if self.itinerary is not None:
+            call = AIMessage(content='', tool_calls=[
+                {'name': 'plan_route', 'args': {}, 'id': 't'}])
+            tool = ToolMessage(content=json.dumps(self.itinerary),
+                               tool_call_id='t', name='plan_route')
+            messages += [call, tool]
+        messages.append(AIMessage(content='respuesta'))
+        yield {'messages': messages}
+
+
+class FakeJudge:
+
+    def __init__(self, reply):
+        self.reply = reply
+        self.calls = 0
+
+    async def ainvoke(self, messages):
+        self.calls += 1
+        return SimpleNamespace(content=self.reply)
+
+
+class FakeAgent(SicosigAgent):
+
+    def __init__(self, probe, itinerary, judge_reply):
+        self.graph = FakeGraph(probe, itinerary)
+        self.model = FakeJudge(judge_reply)
+
+
+class AskFlowTestCase(unittest.IsolatedAsyncioTestCase):
+
+    def make_agent(self, itinerary, judge_reply='LIMPIO', probe=None):
+        probe = probe if probe is not None else []
+        return FakeAgent(probe, itinerary, judge_reply), probe
+
+    def probe_fetch(self, probe):
+        def fetch(*args, **kwargs):
+            probe.append('fetch')
+            return ACTIVE
+        return patch('agent.alerts.safe_fetch', side_effect=fetch)
+
+    async def test_no_verification_before_itinerary(self):
+        agent_, probe = self.make_agent(None)
+        with self.probe_fetch(probe) as fetch:
+            answer = await agent_.ask('hola')
+        self.assertEqual(answer, 'respuesta')
+        self.assertFalse(fetch.called)
+        self.assertEqual(agent_.model.calls, 0)
+        self.assertEqual(agent_.graph.runs, 1)
+        self.assertEqual(probe, ['run'])
+
+    async def test_alerts_fetched_only_after_itinerary(self):
+        agent_, probe = self.make_agent(ROUTE)
+        with self.probe_fetch(probe):
+            await agent_.ask('de A a B')
+        self.assertEqual(probe, ['run', 'fetch'])  # fetch tras el itinerario
+
+    async def test_compromised_loops_then_agent_answers(self):
+        agent_, probe = self.make_agent(ROUTE, 'COMPROMETIDO: C-1 | obras')
+        with self.probe_fetch(probe):
+            answer = await agent_.ask('de A a B')
+        self.assertEqual(probe.count('run'), MAX_VERIFICATION_ROUNDS + 1)
+        self.assertEqual(answer, 'respuesta')
+        self.assertFalse(answer.startswith('[VERIFICACION]'))
 
 
 if __name__ == '__main__':

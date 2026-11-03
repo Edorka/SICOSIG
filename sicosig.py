@@ -4,10 +4,16 @@ import sys
 from agent import SicosigAgent
 
 
+def status(msg):
+    print('» %s' % msg, file=sys.stderr, flush=True)
+
+
 async def main():
-    agent = await SicosigAgent.create()
+    status('conectando con el servidor MCP de transporte…')
+    agent = await SicosigAgent.create(status=status)
+    status('agente listo')
     if len(sys.argv) > 1:
-        print(await agent.ask(' '.join(sys.argv[1:])))
+        print(await agent.ask(' '.join(sys.argv[1:]), status=status))
         return
     await repl(agent)
 
@@ -22,7 +28,7 @@ async def repl(agent):
         if question in ('salir', 'exit', 'quit'):
             break
         if question:
-            print(await agent.ask(question))
+            print(await agent.ask(question, status=status))
 
 
 if __name__ == '__main__':

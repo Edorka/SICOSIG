@@ -32,7 +32,7 @@ cd SICOSIG/mcp-madrid-public-transport && npm install && npm run build && cd ..
 Then the python side:
 
 ```
-virtualenv -p python3 .venv
+python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env   # fill in DEEPINFRA_API_KEY
@@ -44,14 +44,15 @@ only):
 
 ```
 python scripts/update_gtfs.py
-
-> ⚠️ **Warning for node >= 25**: `better-sqlite3@12.4.1` (shipped by the
-> upstream submodule) doesn't compile on this node. The working fix is
-> bumping it to `^13.0.3` in `mcp-madrid-public-transport/package.json`,
-> but since the submodule points at upstream, **this patch is not in a
-> fresh clone** — `npm install` will fail. Re-apply it by hand after
-> cloning before building the server.
 ```
+
+⚠️ **Warning for node >= 25**: `better-sqlite3@12.4.1` (shipped by the
+upstream submodule) doesn't compile on this node. The working fix is
+bumping it to `^13.0.3` in `mcp-madrid-public-transport/package.json`,
+but since the submodule points at upstream, **this patch is not in a
+fresh clone** — `npm install` will fail. Re-apply it by hand after
+cloning before building the server.
+
 
 # Usage
 
@@ -75,12 +76,19 @@ Current state of the data sources:
   (run `scripts/update_gtfs.py`); realtime comes from Renfe GTFS-RT,
   which publishes vehicle positions only, so expected arrivals at a
   station are computed from positions + scheduled times and can be empty.
-- **Route planner**: `plan_ruta` tool computes A→B metro+cercanías+
+- **Route planner**: `plan_route` tool computes A→B metro+cercanías+
   interurban bus routes with the CRTM scheduled times (runs
   `scripts/update_gtfs.py` first, builds `agent/data/network.db`). Note:
   the metro M4 feed the CRTM publishes is stale (valid until 2026-05):
   the planner falls back to weekday patterns then and flags the answer
-  with `aviso`.
+  with `warning`. Active alerts (Renfe's official GTFS-RT ServiceAlerts,
+  no auth) are handled outside the tool and lazily: only once the agent
+  loop has proposed an itinerary, alerts are fetched and a separate
+  verification prompt checks the itinerary against them (no itinerary →
+  nothing is fetched or verified); if compromised, it reports back to
+  the agent, which replans with `plan_route(avoid=[...])` or informs
+  about the alert. The CLI shows each stage (planning via MCP/GTFS
+  tools, checking alerts, verifying) on stderr.
 - **Bus EMT realtime**: needs `EMT_CLIENT_ID` and `EMT_PASS_KEY`
   (free at https://openapi.emtmadrid.es) in `.env`; untested without them.
   Interurban buses already plan from their GTFS schedules.

@@ -7,7 +7,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from agent.router import (active_services, find_station, freq_connections,
-                          normalize, plan)
+                          normalize, plan, plan_avoiding)
 
 
 SCHEMA = '''
@@ -126,18 +126,18 @@ class RouterTestCase(unittest.TestCase):
 
     def test_plan_metro_with_cercanias_transfer(self):
         result = plan('Alfa', 'Delta', when=self.today(), db_path=self.db_path)
-        self.assertEqual(result['origen'], 'Alfa')
-        self.assertEqual(result['destino'], 'Delta')
-        self.assertEqual([t['linea'] for t in result['tramos']], ['1', 'C1'])
-        self.assertEqual(result['transbordos'], 1)
-        self.assertEqual(result['llegada'], '09:35')
+        self.assertEqual(result['origin'], 'Alfa')
+        self.assertEqual(result['destination'], 'Delta')
+        self.assertEqual([t['line'] for t in result['legs']], ['1', 'C1'])
+        self.assertEqual(result['transfers'], 1)
+        self.assertEqual(result['arrive'], '09:35')
 
     def test_plan_bus_interurbano_chain(self):
         result = plan('Alfa', 'Zeta', when=self.today(), db_path=self.db_path)
-        self.assertEqual([t['linea'] for t in result['tramos']],
+        self.assertEqual([t['line'] for t in result['legs']],
                          ['1', 'C1', '421'])
-        self.assertEqual(result['transbordos'], 2)
-        self.assertEqual(result['llegada'], '09:55')
+        self.assertEqual(result['transfers'], 2)
+        self.assertEqual(result['arrive'], '09:55')
 
     def test_plan_same_origin_destination(self):
         self.assertRaises(RuntimeError, plan, 'Delta', 'Delta',
@@ -146,6 +146,21 @@ class RouterTestCase(unittest.TestCase):
     def test_plan_unknown_station(self):
         self.assertRaises(LookupError, plan, 'Nada', 'Delta',
                           when=self.today(), db_path=self.db_path)
+
+    def test_legs_carry_route_ids(self):
+        result = plan('Alfa', 'Delta', when=self.today(),
+                      db_path=self.db_path)
+        self.assertEqual([t['route_id'] for t in result['legs']],
+                         ['4__1___', 'C1'])
+
+    def test_plan_avoiding_skips_line(self):
+        self.assertRaises(RuntimeError, plan_avoiding, 'Alfa', 'Delta',
+                          ['c1'], when=self.today(), db_path=self.db_path)
+
+    def test_plan_avoiding_unknown_line_is_noop(self):
+        result = plan_avoiding('Alfa', 'Delta', ['X99'], when=self.today(),
+                               db_path=self.db_path)
+        self.assertEqual([t['line'] for t in result['legs']], ['1', 'C1'])
 
 
 if __name__ == '__main__':

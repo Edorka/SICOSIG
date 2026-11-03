@@ -138,14 +138,14 @@ def similar_names(partials, rows, norm):
     return [_title(s) for s in similar]
 
 
-def connections_window(db, services, t0):
-    conns = static_connections(db, services, t0) + \
-        freq_connections(db, services, t0)
+def connections_window(db, services, t0, avoid_routes=frozenset()):
+    conns = static_connections(db, services, t0, avoid_routes) + \
+        freq_connections(db, services, t0, avoid_routes)
     conns.sort(key=lambda c: c[0])
     return conns
 
 
-def static_connections(db, services, t0):
+def static_connections(db, services, t0, avoid_routes=frozenset()):
     marks = ','.join('?' * len(services))
     query = (
         'SELECT a.dep, b.arr, a.stop_id, b.stop_id, a.trip_id'
@@ -154,23 +154,39 @@ def static_connections(db, services, t0):
         ' JOIN trips tr ON tr.trip_id = a.trip_id AND tr.freq = 0'
         ' WHERE tr.service_id IN (%s) AND a.dep >= ? AND b.arr <= ?'
         ' ORDER BY a.dep' % marks)
-    rows = db.execute(query, (*services, t0, t0 + HORIZON))
+    params = list(services) + [t0, t0 + HORIZON]
+    if avoid_routes:
+        query = query.replace('tr.freq = 0',
+                              'tr.freq = 0' + avoid_clause('tr', avoid_routes))
+        # la clausula queda en el JOIN ON (antes del WHERE): sus params van primero
+        params = list(avoid_routes) + params
+    rows = db.execute(query, params)
     return [(d, a, f, t, ('s', trip)) for d, a, f, t, trip in rows]
 
 
-def freq_connections(db, services, t0):
+def avoid_clause(alias, avoid_routes):
+    return ' AND %s.route_id NOT IN (%s)' % (
+        alias, ','.join('?' * len(avoid_routes)))
+
+
+def freq_connections(db, services, t0, avoid_routes=frozenset()):
     conns = []
-    for trip, freqs in freq_trips(db, services).items():
+    for trip, freqs in freq_trips(db, services, avoid_routes).items():
         conns += trip_instances(db, trip, freqs, t0)
     return conns
 
 
-def freq_trips(db, services):
+def freq_trips(db, services, avoid_routes=frozenset()):
     marks = ','.join('?' * len(services))
-    rows = db.execute(
+    query = (
         'SELECT f.trip_id, f.start, f."end", f.headway'
         ' FROM frequencies f JOIN trips t ON t.trip_id = f.trip_id'
-        ' WHERE t.service_id IN (%s)' % marks, services)
+        ' WHERE t.service_id IN (%s)' % marks)
+    params = list(services)
+    if avoid_routes:
+        query += avoid_clause('t', avoid_routes)
+        params += list(avoid_routes)
+    rows = db.execute(query, params)
     trips = {}
     for trip, start, end, headway in rows:
         trips.setdefault(trip, []).append((start, end, headway))
@@ -281,26 +297,48 @@ def merge_legs(legs):
 def trip_meta_query(db):
     def meta(key):
         row = db.execute(
-            'SELECT r.short, r.long, r.mode, t.headsign FROM trips t'
-            ' JOIN routes r ON r.route_id = t.route_id'
+            'SELECT t.route_id, r.short, r.long, r.mode, t.headsign'
+            ' FROM trips t JOIN routes r ON r.route_id = t.route_id'
             ' WHERE t.trip_id = ?', (key[1],)).fetchone()
-        return meta_dict(row or ('?', '', 'metro', ''))
+        return meta_dict(row or ('', '?', '', 'metro', ''))
     return meta
 
 
 def meta_dict(row):
-    short, long_, mode, headsign = row
-    return {'modo': mode, 'linea': short,
-            'direccion': headsign or _title(long_.split('-')[-1])}
+    route_id, short, long_, mode, headsign = row
+    return {'route_id': route_id, 'mode': mode, 'line': short,
+            'direction': headsign or _title(long_.split('-')[-1])}
 
 
-def plan(origin, destination, when=None, db_path=DB_PATH):
+def plan(origin, destination, when=None, db_path=DB_PATH,
+         avoid_routes=frozenset()):
     require_db(db_path)
     db = sqlite3.connect(db_path)
     try:
-        return build_result(db, origin, destination, when)
+        return build_result(db, origin, destination, when, avoid_routes)
     finally:
         db.close()
+
+
+def plan_avoiding(origin, destination, avoid_names=(), when=None,
+                  db_path=DB_PATH):
+    '''plan() permitiendo evitar lineas por nombre corto ('C-5', '10').'''
+    require_db(db_path)
+    db = sqlite3.connect(db_path)
+    try:
+        avoid = resolve_line_ids(db, avoid_names)
+        return build_result(db, origin, destination, when, avoid)
+    finally:
+        db.close()
+
+
+def resolve_line_ids(db, names):
+    ids = set()
+    for name in names:
+        ids |= {row[0] for row in db.execute(
+            'SELECT route_id FROM routes'
+            ' WHERE short = ? COLLATE NOCASE OR route_id = ?', (name, name))}
+    return ids
 
 
 def require_db(db_path):
@@ -309,22 +347,23 @@ def require_db(db_path):
                                 'scripts/update_gtfs.py')
 
 
-def build_result(db, origin, destination, when):
+def build_result(db, origin, destination, when, avoid_routes=frozenset()):
     now = when or datetime.now(MADRID_TZ)
     t0 = seconds_of_day(now)
     services, stale = services_today(db, now)
-    legs, label_o, label_d = solve(db, services, origin, destination, t0)
+    legs, label_o, label_d = solve(db, services, origin, destination, t0,
+                                   avoid_routes)
     result = format_result(db, legs, label_o, label_d)
     if stale:
-        result['aviso'] = ('feed GTFS caducado: horarios aproximados por dia'
-                           ' de la semana')
+        result['warning'] = ('feed GTFS caducado: horarios aproximados por dia'
+                             ' de la semana')
     return result
 
 
-def solve(db, services, origin, destination, t0):
+def solve(db, services, origin, destination, t0, avoid_routes=frozenset()):
     label_o, ids_o, _ = find_station(db, origin)
     label_d, ids_d, _ = find_station(db, destination)
-    conns = connections_window(db, services, t0)
+    conns = connections_window(db, services, t0, avoid_routes)
     earliest, parent = csa(conns, load_transfers(db), ids_o, ids_d, t0)
     dest_stop = min(ids_d, key=lambda s: earliest.get(s, INF))
     require_arrival(earliest, dest_stop, label_o, label_d)
@@ -342,17 +381,18 @@ def require_arrival(earliest, dest_stop, label_o, label_d):
 
 def format_result(db, legs, label_o, label_d):
     names = {r[0]: r[1] for r in db.execute('SELECT stop_id, name FROM stops')}
-    tramos = [tramo_dict(leg, names) for leg in legs]
-    salida, llegada = legs[0]['dep'], legs[-1]['arr']
-    return {'origen': label_o, 'destino': label_d,
-            'salida': fmt(salida), 'llegada': fmt(llegada),
-            'duracion_min': round((llegada - salida) / 60),
-            'transbordos': max(0, len(tramos) - 1), 'tramos': tramos}
+    legs_out = [leg_dict(leg, names) for leg in legs]
+    dep, arr = legs[0]['dep'], legs[-1]['arr']
+    return {'origin': label_o, 'destination': label_d,
+            'depart': fmt(dep), 'arrive': fmt(arr),
+            'duration_min': round((arr - dep) / 60),
+            'transfers': max(0, len(legs_out) - 1), 'legs': legs_out}
 
 
-def tramo_dict(leg, names):
-    return {'modo': leg['modo'], 'linea': leg['linea'],
-            'direccion': leg['direccion'],
-            'de': _title(names.get(leg['board'], leg['board'])),
-            'a': _title(names.get(leg['alight'], leg['alight'])),
-            'sale': fmt(leg['dep']), 'llega': fmt(leg['arr'])}
+def leg_dict(leg, names):
+    return {'mode': leg['mode'], 'line': leg['line'],
+            'route_id': leg.get('route_id', ''),
+            'direction': leg['direction'],
+            'frm': _title(names.get(leg['board'], leg['board'])),
+            'to': _title(names.get(leg['alight'], leg['alight'])),
+            'dep': fmt(leg['dep']), 'arr': fmt(leg['arr'])}
