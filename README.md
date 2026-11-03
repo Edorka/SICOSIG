@@ -38,6 +38,21 @@ pip install -r requirements.txt
 cp .env.example .env   # fill in DEEPINFRA_API_KEY
 ```
 
+Download and integrate the official CRTM GTFS feeds (metro + cercanías,
+fixes cercanías arrivals and builds the local route planner DB, stdlib
+only):
+
+```
+python scripts/update_gtfs.py
+
+> ⚠️ **Warning for node >= 25**: `better-sqlite3@12.4.1` (shipped by the
+> upstream submodule) doesn't compile on this node. The working fix is
+> bumping it to `^13.0.3` in `mcp-madrid-public-transport/package.json`,
+> but since the submodule points at upstream, **this patch is not in a
+> fresh clone** — `npm install` will fail. Re-apply it by hand after
+> cloning before building the server.
+```
+
 # Usage
 
 One shot:
@@ -55,19 +70,20 @@ sicosig> de Atocha a Chamartín
 
 Current state of the data sources:
 
-- **Metro**: real-time arrivals, works out of the box ✅
-- **Cercanías**: broken upstream (the shipped `gtfs-static.db` has no
-  `par_5_*` stops and the repo no longer carries the train GTFS; the tool
-  answers "Stop not found"). The agent says so instead of inventing times.
-- **Bus EMT**: needs `EMT_CLIENT_ID` and `EMT_PASS_KEY`
+- **Metro**: real-time arrivals (teleindicadores), works out of the box ✅
+- **Cercanías**: station search fixed with the official CRTM M5 feed
+  (run `scripts/update_gtfs.py`); realtime comes from Renfe GTFS-RT,
+  which publishes vehicle positions only, so expected arrivals at a
+  station are computed from positions + scheduled times and can be empty.
+- **Route planner**: `plan_ruta` tool computes A→B metro+cercanías+
+  interurban bus routes with the CRTM scheduled times (runs
+  `scripts/update_gtfs.py` first, builds `agent/data/network.db`). Note:
+  the metro M4 feed the CRTM publishes is stale (valid until 2026-05):
+  the planner falls back to weekday patterns then and flags the answer
+  with `aviso`.
+- **Bus EMT realtime**: needs `EMT_CLIENT_ID` and `EMT_PASS_KEY`
   (free at https://openapi.emtmadrid.es) in `.env`; untested without them.
-
-> ⚠️ **Warning for node >= 25**: `better-sqlite3@12.4.1` (shipped by the
-> upstream submodule) doesn't compile on this node. The working fix is
-> bumping it to `^13.0.3` in `mcp-madrid-public-transport/package.json`,
-> but since the submodule points at upstream, **this patch is not in a
-> fresh clone** — `npm install` will fail. Re-apply it by hand after
-> cloning before building the server.
+  Interurban buses already plan from their GTFS schedules.
 
 # Running the tests
 
