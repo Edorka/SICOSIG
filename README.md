@@ -1,5 +1,11 @@
 # SICOSIG
 
+![LLM agent](https://img.shields.io/badge/LLM-tool_calling_agent-8B5CF6)
+![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
+![LangGraph](https://img.shields.io/badge/LangGraph-agent_loop-1C3C3C?logo=langchain&logoColor=white)
+![Pydantic](https://img.shields.io/badge/Pydantic-data_contracts-E92063?logo=pydantic&logoColor=white)
+![TDD](https://img.shields.io/badge/TDD-unittest-2EA44F)
+
 **Should I Come Or Should I Go**: a langgraph agent that tells you how to get
 from A to B in Madrid public transport (metro and cercanías) as briefly as
 possible, using real-time arrivals from the

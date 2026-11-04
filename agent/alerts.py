@@ -13,6 +13,8 @@ import json
 import time
 import urllib.request
 
+from agent.models import Alert
+
 RENFE_ALERTS_URL = 'https://gtfsrt.renfe.com/alerts.json'
 FETCH_TIMEOUT = 10
 CACHE_TTL = 60
@@ -37,18 +39,25 @@ def safe_fetch(url=RENFE_ALERTS_URL):
 
 def madrid_alerts(feed, now=None):
     return [alert for alert in (parse_entity(e) for e in feed.get('entity', []))
-            if alert and alert['route_ids'] and is_active(alert, now)]
+            if alert.route_ids and is_active(alert, now)]
 
 
 def parse_entity(entity):
     alert = entity.get('alert', {})
     selectors = alert.get('informedEntity') or [{}]
+    return Alert(route_ids=madrid_routes(selectors),
+                 stop_ids=stops_of(selectors),
+                 active_period=alert.get('activePeriod') or [],
+                 text=first_text(alert))
+
+
+def madrid_routes(selectors):
     routes = {s.get('routeId') for s in selectors}
-    routes = {r for r in routes if r and r.startswith('10')}
-    stops = {s.get('stopId') for s in selectors}
-    return {'route_ids': routes, 'stop_ids': stops - {None},
-            'active_period': alert.get('activePeriod') or [],
-            'text': first_text(alert)}
+    return {r for r in routes if r and r.startswith('10')}
+
+
+def stops_of(selectors):
+    return {s.get('stopId') for s in selectors} - {None}
 
 
 def first_text(alert):
@@ -63,7 +72,7 @@ def first_text(alert):
 
 def is_active(alert, now):
     now = now or time.time()
-    periods = alert['active_period']
+    periods = alert.active_period
     if not periods:
         return True
     return any(float(p.get('start', 0)) <= now <= float(p.get('end', now + 1))
@@ -72,12 +81,15 @@ def is_active(alert, now):
 
 def compromised_legs(legs, active):
     '''Etapas del itinerario cuya linea tiene un aviso activo que le
-    repercute; el emparejamiento es por route_id.'''
+    repercute; el emparejamiento es por route_id. Devuelve (leg, avisos).'''
     hits = []
     for leg in legs:
-        route_id = leg.get('route_id')
-        matches = [alert for alert in active
-                   if route_id and route_id in alert['route_ids']]
+        matches = leg_alerts(leg, active)
         if matches:
-            hits.append({'leg': leg, 'alerts': matches})
+            hits.append((leg, matches))
     return hits
+
+
+def leg_alerts(leg, active):
+    return [alert for alert in active
+            if leg.route_id and leg.route_id in alert.route_ids]
