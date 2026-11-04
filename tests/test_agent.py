@@ -1,4 +1,3 @@
-import json
 import os
 import unittest
 from types import SimpleNamespace
@@ -9,6 +8,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 from agent import (DEFAULT_MODEL, MAX_VERIFICATION_ROUNDS, MCP_DIR,
                    SYSTEM_PROMPT, SicosigAgent, unindent, build_mcp_client,
                    build_model, itinerary_of)
+from agent.models import Alert, Itinerary, Leg
 
 
 class AgentConfigTestCase(unittest.TestCase):
@@ -70,20 +70,25 @@ class AgentConfigTestCase(unittest.TestCase):
         self.assertEqual(target['transport'], 'stdio')
 
     def test_itinerary_of_picks_last_valid_route(self):
-        error = ToolMessage(content=json.dumps({'error': 'sin ruta'}),
+        error = ToolMessage(content='{"kind": "error", "error": "sin ruta"}',
                             tool_call_id='1', name='plan_route')
-        valid = ToolMessage(content=json.dumps({'legs': [{'line': '1'}]}),
+        valid = ToolMessage(content=make_itinerary().model_dump_json(),
                             tool_call_id='2', name='plan_route')
-        self.assertEqual(itinerary_of([error, valid]),
-                         {'legs': [{'line': '1'}]})
+        self.assertEqual(itinerary_of([error, valid]), make_itinerary())
         self.assertIsNone(itinerary_of([error]))
         self.assertIsNone(itinerary_of([]))
 
 
-ROUTE = {'legs': [{'mode': 'cercanias', 'line': 'C-1', 'route_id': '10R1',
-                   'frm': 'A', 'to': 'B'}]}
-ACTIVE = [{'route_ids': {'10R1'}, 'stop_ids': set(), 'active_period': [],
-           'text': 'obras en via'}]
+def make_itinerary():
+    leg = Leg(mode='cercanias', line='C-1', route_id='10R1',
+              direction='B', frm='A', to='B', dep='09:00', arr='09:10')
+    return Itinerary(origin='A', destination='B', depart='09:00',
+                     arrive='09:10', duration_min=10, transfers=0,
+                     legs=[leg])
+
+
+ROUTE = make_itinerary()
+ACTIVE = [Alert(route_ids={'10R1'}, text='obras en via')]
 
 
 class FakeGraph:
@@ -100,7 +105,7 @@ class FakeGraph:
         if self.itinerary is not None:
             call = AIMessage(content='', tool_calls=[
                 {'name': 'plan_route', 'args': {}, 'id': 't'}])
-            tool = ToolMessage(content=json.dumps(self.itinerary),
+            tool = ToolMessage(content=self.itinerary.model_dump_json(),
                                tool_call_id='t', name='plan_route')
             messages += [call, tool]
         messages.append(AIMessage(content='respuesta'))

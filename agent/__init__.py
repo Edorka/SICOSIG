@@ -1,4 +1,3 @@
-import json
 import os
 import textwrap
 
@@ -8,8 +7,10 @@ from langchain_core.tools import tool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
+from pydantic import ValidationError
 
 from agent import alerts, router, verify
+from agent.models import Itinerary, plan
 
 DEEPINFRA_URL = 'https://api.deepinfra.com/v1/openai'
 DEFAULT_MODEL = 'google/gemma-3-4b-it'  # ollama: gemma3:4b
@@ -68,15 +69,15 @@ def plan_route(origin: str, destination: str, avoid: list[str] = []) -> str:
     lineas, transbordos y duracion. Usar siempre antes de responder la
     ruta.'''
     try:
-        result = router.plan_avoiding(origin, destination, avoid)
-        return json.dumps(result, ensure_ascii=False)
+        return plan.dump(plan.itinerary(
+            router.plan_avoiding(origin, destination, avoid)))
     except FileNotFoundError as exc:
-        return json.dumps({'error': str(exc)}, ensure_ascii=False)
+        return plan.dump(plan.error(str(exc)))
     except LookupError as exc:
-        return json.dumps({'error': 'estacion ambigua o desconocida',
-                           'sugerencias': exc.args[0]}, ensure_ascii=False)
+        return plan.dump(plan.error('estacion ambigua o desconocida',
+                                    exc.args[0]))
     except RuntimeError as exc:
-        return json.dumps({'error': str(exc)}, ensure_ascii=False)
+        return plan.dump(plan.error(str(exc)))
 
 
 def build_mcp_client():
@@ -97,17 +98,21 @@ def noop(_msg):
 
 
 def itinerary_of(messages):
-    '''Ultima salida util de plan_route en la pasada del agente.'''
+    '''Ultimo itinerario util de plan_route en la pasada del agente.'''
     for msg in reversed(messages):
         if getattr(msg, 'name', None) != 'plan_route':
             continue
-        try:
-            data = json.loads(getattr(msg, 'content', '') or '')
-        except ValueError:
-            continue
-        if isinstance(data, dict) and data.get('legs'):
-            return data
+        found = parse_itinerary(getattr(msg, 'content', '') or '')
+        if found is not None:
+            return found
     return None
+
+
+def parse_itinerary(content):
+    try:
+        return Itinerary.model_validate_json(content)
+    except ValidationError:
+        return None
 
 
 def tool_status(name):
@@ -148,10 +153,10 @@ class SicosigAgent:
             status('verificando el itinerario contra los avisos…')
             verdict = await verify.check_itinerary(self.model, itinerary,
                                                    active)
-            if verdict['clean']:
+            if verdict.clean:
                 break
             status('itinerario comprometido (%s): reportando al agente '
-                   'para replanificar…' % ', '.join(verdict['lines'] or ['?']))
+                   'para replanificar…' % ', '.join(verdict.lines or ['?']))
             messages = list(messages) + [
                 HumanMessage(verify.report_message(verdict))]
         return messages[-1].content

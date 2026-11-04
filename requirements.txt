@@ -2,4 +2,5 @@ langgraph
 langchain-openai
 langchain-mcp-adapters
 mcp
+pydantic>=2,<3
 python-dotenv

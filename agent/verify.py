@@ -4,17 +4,18 @@ check_itinerary() se ejecuta tras cada pasada del agente: cruza las etapas
 del itinerario propuesto (route_id) con los avisos de servicio activos y,
 si hay coincidencias, el prompt aparte VERIFY_PROMPT decide si el aviso
 compromete de verdad el viaje (servicio suspendido, tramo cortado, desvio
-importante) o es un mero retraso/leve reajuste. El veredicto vuelve al
-agente como mensaje '[VERIFICACION] ...' para que replantee la ruta con
-plan_route(avoid=...) o informe del aviso. Si el juez no responde en el
-formato pedido se es conservador: toda coincidencia por route_id cuenta
-como compromiso.
+importante) o es un mero retraso/leve reajuste. El veredicto (Verdict)
+vuelve al agente como mensaje '[VERIFICACION] ...' para que replantee la
+ruta con plan_route(avoid=...) o informe del aviso. Si el juez no
+responde en el formato pedido se es conservador: toda coincidencia por
+route_id cuenta como compromiso.
 '''
 import json
 import re
 from textwrap import dedent
 
 from agent import alerts
+from agent.models import Verdict
 
 VERIFY_PROMPT = dedent('''
     Eres la verificacion de itinerarios de SICOSIG, una etapa aparte que se
@@ -34,28 +35,33 @@ VERIFY_PROMPT = dedent('''
     ''').strip()
 
 VERDICT = re.compile(r'\s*(LIMPIO|COMPROMETIDO)\b\s*:?(.*)', re.I | re.S)
-CLEAN = {'clean': True, 'lines': [], 'detail': ''}
 
 
 async def check_itinerary(model, itinerary, active):
-    '''Veredicto sobre el itinerario propuesto: {'clean', 'lines',
-    'detail'}. Sin coincidencias por route_id no hay ni llamada al juez.'''
-    hits = alerts.compromised_legs(itinerary.get('legs') or [], active)
+    '''Veredicto sobre el itinerario propuesto. Sin coincidencias por
+    route_id no hay ni llamada al juez.'''
+    hits = alerts.compromised_legs(itinerary.legs, active)
     if not hits:
-        return dict(CLEAN)
+        return Verdict(clean=True)
     res = await model.ainvoke([('system', VERIFY_PROMPT),
                                ('user', payload(itinerary, active))])
-    verdict = parse_verdict(getattr(res, 'content', '') or '')
-    return verdict if verdict is not None else fallback(hits)
+    return parse_verdict(getattr(res, 'content', '') or '') or fallback(hits)
 
 
 def payload(itinerary, active):
-    legs = [{k: leg.get(k) for k in ('mode', 'line', 'route_id', 'frm', 'to')}
-            for leg in itinerary.get('legs') or []]
-    avisos = [{'route_id': rid, 'text': alert['text']}
-              for alert in active for rid in sorted(alert['route_ids'])]
-    return json.dumps({'itinerario': legs, 'avisos_activos': avisos},
+    return json.dumps({'itinerario': legs_payload(itinerary.legs),
+                       'avisos_activos': alerts_payload(active)},
                       ensure_ascii=False)
+
+
+def legs_payload(legs):
+    include = {'mode', 'line', 'route_id', 'frm', 'to'}
+    return [leg.model_dump(include=include) for leg in legs]
+
+
+def alerts_payload(active):
+    return [{'route_id': rid, 'text': alert.text}
+            for alert in active for rid in sorted(alert.route_ids)]
 
 
 def parse_verdict(text):
@@ -63,26 +69,29 @@ def parse_verdict(text):
     if not match:
         return None
     if match.group(1).upper() == 'LIMPIO':
-        return dict(CLEAN)
-    lines, _, detail = match.group(2).partition('|')
+        return Verdict(clean=True)
+    return compromised(match.group(2))
+
+
+def compromised(rest):
+    lines, _, detail = rest.partition('|')
     names = [n.strip() for n in re.split(r'[,;]', lines) if n.strip()]
-    return {'clean': False, 'lines': names,
-            'detail': detail.strip() or 'avisos en: ' + lines.strip()}
+    detail = detail.strip() or 'avisos en: ' + lines.strip()
+    return Verdict(clean=False, lines=names, detail=detail)
 
 
 def fallback(hits):
-    lines = sorted({hit['leg'].get('line') or '?' for hit in hits})
-    texts = sorted({alert['text'] for hit in hits
-                    for alert in hit['alerts']})
-    return {'clean': False, 'lines': lines,
-            'detail': 'avisos activos por route_id: ' + '; '.join(texts)}
+    lines = sorted({leg.line or '?' for leg, _ in hits})
+    texts = sorted({a.text for _, found in hits for a in found})
+    return Verdict(clean=False, lines=lines,
+                   detail='avisos activos por route_id: ' + '; '.join(texts))
 
 
 def report_message(verdict):
-    lines = ', '.join(verdict['lines']) or '?'
-    avoid = json.dumps(verdict['lines'], ensure_ascii=False)
+    lines = ', '.join(verdict.lines) or '?'
+    avoid = json.dumps(verdict.lines, ensure_ascii=False)
     return ('[VERIFICACION] el itinerario propuesto esta comprometido por '
             'avisos de servicio (%s; lineas: %s). Traza de nuevo con '
             'plan_route pasando avoid=%s; si no hay alternativa sin aviso, '
             'informa del aviso en una frase y da la mejor opcion '
-            'disponible.' % (verdict['detail'], lines, avoid))
+            'disponible.' % (verdict.detail, lines, avoid))
